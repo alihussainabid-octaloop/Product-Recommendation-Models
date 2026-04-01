@@ -1,3 +1,4 @@
 *.py   text=auto   eol=lf
 *.json  text=auto   eol=lf
 *.pkl filter=lfs diff=lfs merge=lfs -text
+*.csv filter=lfs diff=lfs merge=lfs -text
