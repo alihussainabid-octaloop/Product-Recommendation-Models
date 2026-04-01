@@ -1,4 +1,5 @@
 fastapi[standard]
+uvicorn
 pyjwt
 pwdlib[argon2]
 streamlit
