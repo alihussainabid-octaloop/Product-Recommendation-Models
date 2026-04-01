@@ -1,0 +1,30 @@
+{
+  "johndoe": {
+    "username": "johndoe",
+    "full_name": "John Doe",
+    "email": "johndoe@example.com",
+    "hashed_password": "$argon2id$v=19$m=65536,t=3,p=4$wagCPXjifgvUFBzq4hqe3w$CYaIb8sB+wtD+Vu/P4uod1+Qof8h+1g7bbDlBID48Rc",
+    "disabled": false
+  },
+  "alice": {
+    "username": "alice",
+    "full_name": "Alice Wonderson",
+    "email": "alice@example.com",
+    "hashed_password": "fakehashedsecret2",
+    "disabled": true
+  },
+  "ni66awhat": {
+    "username": "ni66awhat",
+    "full_name": "Ni66a What",
+    "email": "ni66a@what.com",
+    "hashed_password": "$argon2id$v=19$m=65536,t=3,p=4$EyQBs+6XOL1qK7XByjFqNA$mg4c09Od9aiFRM7xekWB+6guWWiflaTl3hWEB87DUvU",
+    "disabled": false
+  },
+  "hotdog": {
+    "username": "hotdog",
+    "full_name": "Hot Dog",
+    "email": "hotdog@nikka.com",
+    "hashed_password": "$argon2id$v=19$m=65536,t=3,p=4$/Y8QBRG3pe3V6GDORmqigQ$AfqzrA7r9BPJeBg1+/T2q+qNaAKhAP/rdQ0fUhmeibQ",
+    "disabled": false
+  }
+}

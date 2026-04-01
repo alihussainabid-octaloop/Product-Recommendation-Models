@@ -1,0 +1,12 @@
+fastapi[standard]
+pyjwt
+pwdlib[argon2]
+streamlit
+pandas
+numpy
+opencv-python
+tensorflow
+pillow
+torch
+transformers
+nltk

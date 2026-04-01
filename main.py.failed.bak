@@ -1,0 +1,637 @@
+import io
+import json
+import os
+import pickle
+import warnings
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
+from typing import Annotated, Optional
+
+import aiofiles
+import jwt
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torchvision.transforms as transforms
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, status
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from jwt.exceptions import InvalidTokenError
+from PIL import Image
+from pwdlib import PasswordHash
+from pydantic import BaseModel, Field
+
+# Suppress warnings
+warnings.filterwarnings("ignore")
+
+# ============= Configuration =============
+SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
+MODEL_PATH = "./models/image_classifier_ecommerce.pkl"
+USERS_DB_PATH = "fake_users_db.json"
+IMAGE_SIZE = (80, 60)  # Expected input size from training
+
+
+# ============= Keras to PyTorch Model Conversion =============
+class KerasToPyTorchCNN(nn.Module):
+    """PyTorch model matching the exact Keras architecture from training"""
+
+    def __init__(self, num_classes: int, input_shape: tuple = (80, 60, 3)):
+        super().__init__()
+
+        # Input: (batch, 3, 80, 60)
+        self.conv1 = nn.Conv2d(3, 16, kernel_size=3, padding=1)
+        self.relu1 = nn.ReLU()
+        self.pool1 = nn.MaxPool2d(2)  # Output: (batch, 16, 40, 30)
+
+        self.conv2 = nn.Conv2d(16, 32, kernel_size=3, padding=1)
+        self.relu2 = nn.ReLU()
+        self.pool2 = nn.MaxPool2d(2)  # Output: (batch, 32, 20, 15)
+
+        self.conv3 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        self.relu3 = nn.ReLU()
+        self.pool3 = nn.MaxPool2d(2)  # Output: (batch, 64, 10, 7)
+
+        # Calculate flattened size: 64 * 10 * 7 = 4480
+        self.flatten = nn.Flatten()
+
+        # The weights from Keras expect 2560 input features, not 4480
+        # This suggests the Keras model might have had a different architecture
+        # Let's check the actual weights shape
+        self.fc1 = nn.Linear(4480, 64)
+        self.dropout = nn.Dropout(0.5)
+        self.fc2 = nn.Linear(64, num_classes)
+
+    def forward(self, x):
+        x = self.pool1(self.relu1(self.conv1(x)))
+        x = self.pool2(self.relu2(self.conv2(x)))
+        x = self.pool3(self.relu3(self.conv3(x)))
+        x = self.flatten(x)
+        x = self.fc1(x)
+        x = self.relu1(x)  # ReLU
+        x = self.dropout(x)
+        x = self.fc2(x)
+        return x
+
+
+def load_keras_model_from_pickle(pickle_path: str) -> tuple:
+    """Load Keras model from pickle and convert to PyTorch"""
+
+    with open(pickle_path, "rb") as f:
+        model_data = pickle.load(f)
+
+    # Extract metadata
+    num_classes = model_data.get("num_classes", 0)
+    class_names = model_data.get("class_names", [])
+    label_mapping = model_data.get("label_mapping", {})
+    keras_weights = model_data.get("weights")
+
+    if not keras_weights:
+        raise ValueError("No model weights found in pickle file")
+
+    # Print weight shapes for debugging
+    print("Keras weight shapes:")
+    for i, w in enumerate(keras_weights):
+        if w is not None:
+            print(f"  Layer {i}: {w.shape}")
+
+    # Get the first dense layer weight shape to determine expected input size
+    # Dense layer weights are typically after all conv layers
+    # Find the first dense layer weight (should have 2 dimensions)
+    dense_layer_idx = None
+    for i, w in enumerate(keras_weights):
+        if w is not None and len(w.shape) == 2:
+            dense_layer_idx = i
+            break
+
+    if dense_layer_idx is not None:
+        expected_input_size = keras_weights[dense_layer_idx].shape[0]
+        print(f"Expected input size for first dense layer: {expected_input_size}")
+    else:
+        expected_input_size = 4480  # Default
+
+    # Create model with correct dimensions
+    class AdaptiveKerasToPyTorchCNN(nn.Module):
+        def __init__(self, num_classes, expected_input_size):
+            super().__init__()
+
+            # Conv layers (same as before)
+            self.conv1 = nn.Conv2d(3, 16, kernel_size=3, padding=1)
+            self.relu1 = nn.ReLU()
+            self.pool1 = nn.MaxPool2d(2)
+
+            self.conv2 = nn.Conv2d(16, 32, kernel_size=3, padding=1)
+            self.relu2 = nn.ReLU()
+            self.pool2 = nn.MaxPool2d(2)
+
+            self.conv3 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+            self.relu3 = nn.ReLU()
+            self.pool3 = nn.MaxPool2d(2)
+
+            self.flatten = nn.Flatten()
+
+            # Use the expected input size from weights
+            self.fc1 = nn.Linear(expected_input_size, 64)
+            self.dropout = nn.Dropout(0.5)
+            self.fc2 = nn.Linear(64, num_classes)
+
+        def forward(self, x):
+            x = self.pool1(self.relu1(self.conv1(x)))
+            x = self.pool2(self.relu2(self.conv2(x)))
+            x = self.pool3(self.relu3(self.conv3(x)))
+            x = self.flatten(x)
+            x = self.fc1(x)
+            x = self.relu1(x)
+            x = self.dropout(x)
+            x = self.fc2(x)
+            return x
+
+    pytorch_model = AdaptiveKerasToPyTorchCNN(num_classes, expected_input_size)
+
+    # Load weights (same as before)
+    with torch.no_grad():
+        layer_idx = 0
+
+        # Conv2D layer 1
+        if len(keras_weights) > layer_idx:
+            conv1_weights = keras_weights[layer_idx].transpose(3, 2, 0, 1)
+            pytorch_model.conv1.weight.data = torch.from_numpy(conv1_weights).float()
+            layer_idx += 1
+            if len(keras_weights) > layer_idx and keras_weights[layer_idx] is not None:
+                pytorch_model.conv1.bias.data = torch.from_numpy(
+                    keras_weights[layer_idx]
+                ).float()
+            layer_idx += 1
+
+        # Conv2D layer 2
+        if len(keras_weights) > layer_idx:
+            conv2_weights = keras_weights[layer_idx].transpose(3, 2, 0, 1)
+            pytorch_model.conv2.weight.data = torch.from_numpy(conv2_weights).float()
+            layer_idx += 1
+            if len(keras_weights) > layer_idx and keras_weights[layer_idx] is not None:
+                pytorch_model.conv2.bias.data = torch.from_numpy(
+                    keras_weights[layer_idx]
+                ).float()
+            layer_idx += 1
+
+        # Conv2D layer 3
+        if len(keras_weights) > layer_idx:
+            conv3_weights = keras_weights[layer_idx].transpose(3, 2, 0, 1)
+            pytorch_model.conv3.weight.data = torch.from_numpy(conv3_weights).float()
+            layer_idx += 1
+            if len(keras_weights) > layer_idx and keras_weights[layer_idx] is not None:
+                pytorch_model.conv3.bias.data = torch.from_numpy(
+                    keras_weights[layer_idx]
+                ).float()
+            layer_idx += 1
+
+        # Dense layer 1
+        if len(keras_weights) > layer_idx + 1:
+            dense1_weights = keras_weights[layer_idx].T
+            pytorch_model.fc1.weight.data = torch.from_numpy(dense1_weights).float()
+            layer_idx += 1
+            if len(keras_weights) > layer_idx and keras_weights[layer_idx] is not None:
+                pytorch_model.fc1.bias.data = torch.from_numpy(
+                    keras_weights[layer_idx]
+                ).float()
+            layer_idx += 1
+
+        # Output Dense layer
+        if len(keras_weights) > layer_idx + 1:
+            dense2_weights = keras_weights[layer_idx].T
+            pytorch_model.fc2.weight.data = torch.from_numpy(dense2_weights).float()
+            layer_idx += 1
+            if len(keras_weights) > layer_idx and keras_weights[layer_idx] is not None:
+                pytorch_model.fc2.bias.data = torch.from_numpy(
+                    keras_weights[layer_idx]
+                ).float()
+
+    # Create default label mapping if needed
+    if class_names and not label_mapping:
+        label_mapping = {i: name for i, name in enumerate(class_names)}
+
+    return pytorch_model, class_names, label_mapping, num_classes
+
+
+# ============= Model Manager =============
+class ModelManager:
+    """Singleton model manager for efficient inference"""
+
+    _instance = None
+    _model = None
+    _class_names = None
+    _label_mapping = None
+    _device = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    @classmethod
+    async def initialize(cls, model_path: str):
+        """Load model once at startup"""
+        if cls._model is None:
+            try:
+                # Set device
+                cls._device = torch.device(
+                    "cuda" if torch.cuda.is_available() else "cpu"
+                )
+
+                # Load and convert model
+                cls._model, cls._class_names, cls._label_mapping, num_classes = (
+                    load_keras_model_from_pickle(model_path)
+                )
+
+                # Validate label_mapping
+                if cls._label_mapping is None:
+                    # Create default mapping if not present
+                    cls._label_mapping = {
+                        i: name for i, name in enumerate(cls._class_names)
+                    }
+                    print(f"Created default label mapping: {cls._label_mapping}")
+
+                cls._model.to(cls._device)
+                cls._model.eval()
+
+                print(
+                    f"Model loaded successfully on {cls._device} with {num_classes} classes"
+                )
+                print(f"Class names: {cls._class_names}")
+                print(f"Label mapping: {cls._label_mapping}")
+
+            except Exception as e:
+                print(f"Failed to load model: {e}")
+                raise
+
+    @classmethod
+    def get_model(cls):
+        if cls._model is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Model not initialized",
+            )
+        return cls._model, cls._class_names, cls._label_mapping, cls._device
+
+
+# ============= Image Preprocessing =============
+class ImageProcessor:
+    """Efficient image preprocessing pipeline"""
+
+    def __init__(self, target_size: tuple = IMAGE_SIZE):
+        self.target_size = target_size
+        self.transform = transforms.Compose(
+            [
+                transforms.Resize(target_size),
+                transforms.ToTensor(),
+                transforms.Normalize(
+                    mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+                ),
+            ]
+        )
+
+    async def process(self, image_bytes: bytes) -> torch.Tensor:
+        """Process image bytes to model-ready tensor with batch dimension"""
+        try:
+            # Open image with PIL
+            image = Image.open(io.BytesIO(image_bytes))
+
+            # Convert to RGB if needed
+            if image.mode != "RGB":
+                image = image.convert("RGB")
+
+            # Apply transforms
+            tensor = self.transform(image)
+
+            # Ensure it's a tensor
+            if not isinstance(tensor, torch.Tensor):
+                tensor = torch.from_numpy(np.array(tensor))
+
+            # Add batch dimension if needed
+            if tensor.dim() == 3:
+                batched_tensor = tensor.unsqueeze(0)
+            else:
+                batched_tensor = tensor
+
+            return batched_tensor
+
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid image format: {str(e)}",
+            )
+
+
+# ============= Lifespan Management =============
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Handle startup and shutdown events"""
+    # Startup: Load model
+    await ModelManager.initialize(MODEL_PATH)
+
+    # Load users database
+    if not os.path.exists(USERS_DB_PATH):
+        async with aiofiles.open(USERS_DB_PATH, "w") as f:
+            await f.write(json.dumps({}))
+
+    yield
+
+    # Shutdown: Cleanup if needed
+    pass
+
+
+app = FastAPI(lifespan=lifespan)
+
+
+# ============= Pydantic Models =============
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+
+
+class TokenData(BaseModel):
+    username: str | None = None
+
+
+class User(BaseModel):
+    username: str
+    email: str | None = None
+    full_name: str | None = None
+    disabled: bool | None = None
+
+
+class UserInDB(User):
+    hashed_password: str
+
+
+class UserCreate(BaseModel):
+    username: str = Field(..., min_length=3, max_length=50)
+    password: str = Field(..., min_length=6)
+    email: str | None = None
+    full_name: str | None = None
+
+    @classmethod
+    def as_form(
+        cls,
+        username: str = Form(..., min_length=3, max_length=50),
+        password: str = Form(..., min_length=6),
+        email: str = Form(None),
+        full_name: str = Form(None),
+    ):
+        return cls(
+            username=username,
+            password=password,
+            email=email,
+            full_name=full_name,
+        )
+
+
+# ============= Authentication =============
+password_hash = PasswordHash.recommended()
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+
+def verify_password(plain_password: str, hashed_password: str):
+    return password_hash.verify(plain_password, hashed_password)
+
+
+def get_hashed_password(password: str):
+    return password_hash.hash(password)
+
+
+def get_user(username: str) -> Optional[UserInDB]:
+    """Get user from database"""
+    try:
+        with open(USERS_DB_PATH, "r") as f:
+            users_db = json.load(f)
+
+        if username in users_db:
+            return UserInDB(**users_db[username])
+    except (json.JSONDecodeError, IOError):
+        pass
+    return None
+
+
+def authenticate_user(username: str, password: str) -> Optional[UserInDB]:
+    """Authenticate user"""
+    user = get_user(username)
+
+    if not user:
+        # Use dummy hash to prevent timing attacks
+        password_hash.verify(password, password_hash.hash("dummy"))
+        return None
+
+    if not verify_password(password, user.hashed_password):
+        return None
+
+    return user
+
+
+def create_access_token(data: dict, expires_delta: timedelta | None = None):
+    to_encode = data.copy()
+
+    if expires_delta:
+        expire = datetime.now(timezone.utc) + expires_delta
+    else:
+        expire = datetime.now(timezone.utc) + timedelta(minutes=15)
+
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+
+async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)]) -> UserInDB:
+    """Get current authenticated user"""
+    credentials_exception = HTTPException(
+        status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username = payload.get("sub")
+        if not username:
+            raise credentials_exception
+
+        user = get_user(username)
+        if not user:
+            raise credentials_exception
+
+        return user
+
+    except InvalidTokenError:
+        raise credentials_exception
+
+
+async def get_current_active_user(
+    current_user: Annotated[UserInDB, Depends(get_current_user)],
+) -> UserInDB:
+    """Get current active user"""
+    if current_user.disabled:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Inactive user",
+        )
+    return current_user
+
+
+# ============= API Endpoints =============
+@app.post("/token", response_model=Token)
+async def login_for_access_token(
+    form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
+) -> Token:
+    """Login endpoint for access token"""
+    user = authenticate_user(form_data.username, form_data.password)
+    if not user:
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    access_token = create_access_token(
+        data={"sub": user.username},
+        expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
+    )
+    return Token(access_token=access_token, token_type="bearer")
+
+
+@app.post("/users/register", response_model=User, status_code=status.HTTP_201_CREATED)
+async def register_new_user(
+    new_user: Annotated[UserCreate, Depends(UserCreate.as_form)],
+):
+    """Register a new user"""
+    # Check if user exists
+    if get_user(new_user.username):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Username already registered",
+        )
+
+    # Create user
+    hashed_password = get_hashed_password(new_user.password)
+    user_dict = {
+        "username": new_user.username,
+        "full_name": new_user.full_name,
+        "email": new_user.email,
+        "hashed_password": hashed_password,
+        "disabled": False,
+    }
+
+    # Save to database
+    try:
+        with open(USERS_DB_PATH, "r") as f:
+            users_db = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        users_db = {}
+
+    users_db[new_user.username] = user_dict
+
+    with open(USERS_DB_PATH, "w") as f:
+        json.dump(users_db, f, indent=2)
+
+    return User(**user_dict)
+
+
+@app.get("/users/me", response_model=User, status_code=status.HTTP_200_OK)
+async def read_users_me(
+    current_user: Annotated[UserInDB, Depends(get_current_active_user)],
+) -> User:
+    """Get current user info"""
+    return current_user
+
+
+@app.post("/model/image_classification", status_code=status.HTTP_200_OK)
+async def image_classification(
+    uploaded_image: Annotated[UploadFile, File(...)],
+    authenticated_user: Annotated[UserInDB, Depends(get_current_active_user)],
+):
+    """Classify uploaded image using the trained model"""
+
+    # Validate file type
+    if not uploaded_image.content_type or not uploaded_image.content_type.startswith(
+        "image/"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="File must be an image",
+        )
+
+    # Read image
+    raw_image_bytes = await uploaded_image.read()
+
+    # Validate file size (max 10MB)
+    max_size = 10 * 1024 * 1024
+    if len(raw_image_bytes) > max_size:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Image size exceeds {max_size // (1024 * 1024)}MB limit",
+        )
+
+    try:
+        # Get model components
+        model, class_names, label_mapping, device = ModelManager.get_model()
+
+        # Process image
+        processor = ImageProcessor()
+        input_tensor = await processor.process(raw_image_bytes)
+        input_tensor = input_tensor.to(device)
+
+        # Run inference
+        with torch.no_grad():
+            outputs = model(input_tensor)
+            probabilities = F.softmax(outputs[0], dim=0)
+
+        # Get predictions
+        predicted_idx = int(
+            torch.argmax(probabilities).item()
+        )  # Explicitly cast to int
+        confidence = probabilities[predicted_idx].item()
+
+        # Map to category name
+        idx_to_category = {v: k for k, v in label_mapping.items()}
+        predicted_category = idx_to_category.get(predicted_idx, "Unknown")
+
+        # Get top-3 predictions
+        top3_probs, top3_indices = torch.topk(probabilities, min(3, len(probabilities)))
+        top3_predictions = [
+            {
+                "category": idx_to_category.get(
+                    int(idx.item()), "Unknown"
+                ),  # Explicitly cast to int
+                "confidence": prob.item(),
+            }
+            for prob, idx in zip(top3_probs, top3_indices)
+        ]
+
+        return {
+            "status": "success",
+            "filename": uploaded_image.filename,
+            "user": authenticated_user.username,
+            "prediction": {
+                "category": predicted_category,
+                "confidence": round(confidence, 4),
+                "index": predicted_idx,
+            },
+            "top_predictions": top3_predictions,
+            "available_categories": class_names,
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Classification failed: {str(e)}",
+        )
+    finally:
+        await uploaded_image.close()
+
+
+@app.get("/health", status_code=status.HTTP_200_OK)
+async def health_check():
+    """Health check endpoint"""
+    return {
+        "status": "healthy",
+        "model_loaded": ModelManager._model is not None,
+        "device": str(ModelManager._device) if ModelManager._device else None,
+    }
