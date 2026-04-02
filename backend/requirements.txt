@@ -2,7 +2,6 @@ fastapi[standard]
 uvicorn
 pyjwt
 pwdlib[argon2]
-streamlit
 pandas
 numpy
 opencv-python
@@ -11,4 +10,3 @@ pillow
 torch
 transformers
 nltk
-plotly

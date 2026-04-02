@@ -1,0 +1,6 @@
+*.py    text=auto   eol=lf
+*.json  text=auto   eol=lf
+*.png   filter=lfs  diff=lfs    merge=lfs
+*.jpg   filter=lfs  diff=lfs    merge=lfs
+*.ico   filter=lfs  diff=lfs    merge=lfs
+*.jpeg  filter=lfs  diff=lfs    merge=lfs
