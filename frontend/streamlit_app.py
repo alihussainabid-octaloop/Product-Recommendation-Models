@@ -257,7 +257,7 @@ if st.button("🔍 Analyze & Recommend", type="primary", use_container_width=Tru
                 x="Metric",
                 y="Confidence",
                 color="Metric",
-                range=[0, 1],
+                range_y=[0, 1],  # <-- FIXED: use range_y instead of range
                 text=conf_data["Confidence"].apply(lambda x: f"{x:.1%}"),
                 title="Prediction Confidence",
             )
@@ -268,7 +268,6 @@ if st.button("🔍 Analyze & Recommend", type="primary", use_container_width=Tru
                 annotation_text="Recommendation threshold",
             )
             st.plotly_chart(fig, use_container_width=True)
-
             # Optional: alternative predictions
             with st.expander("🔍 Alternative predictions (image)"):
                 for alt in image_result.get("alternative_predictions", []):
@@ -279,7 +278,3 @@ if st.button("🔍 Analyze & Recommend", type="primary", use_container_width=Tru
                         else f"Class {alt_idx}"
                     )
                     st.write(f"- **{alt_name}**: {alt['confidence_score']:.1%}")
-
-            with st.expander("📄 Raw API Responses"):
-                st.json(image_result)
-                st.json(sentiment_result)
