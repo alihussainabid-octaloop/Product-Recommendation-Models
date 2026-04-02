@@ -530,6 +530,12 @@ async def startup_event():
     except Exception as e:
         print(f"❌ Failed to load sentiment model on startup: {e}")
 
+    try:
+        model_manager.load_model("./models/image_classifier_ecommerce.pkl")
+        print("✅ Image model loaded successfully on startup")
+    except Exception as e:
+        print(f"❌ Failed to load Image Model on startup: {e}")
+
 
 # Add this helper function to convert numpy types to Python native types
 def convert_numpy_types(obj):
@@ -574,9 +580,8 @@ async def image_classification(
         )
 
     # Validate file type
-    if (
-        uploaded_image.content_type is None
-        or not uploaded_image.content_type.startswith("image/")
+    if uploaded_image.content_type is None or not uploaded_image.content_type.endswith(
+        (".jpg", ".png", "jpeg")
     ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
