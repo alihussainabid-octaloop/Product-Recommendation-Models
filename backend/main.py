@@ -580,8 +580,9 @@ async def image_classification(
         )
 
     # Validate file type
-    if uploaded_image.content_type is None or not uploaded_image.content_type.endswith(
-        (".jpg", ".png", "jpeg")
+    if (
+        uploaded_image.content_type is None
+        or not uploaded_image.content_type.startswith("image/")
     ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

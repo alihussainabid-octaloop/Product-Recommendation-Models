@@ -278,3 +278,7 @@ if st.button("🔍 Analyze & Recommend", type="primary", use_container_width=Tru
                         else f"Class {alt_idx}"
                     )
                     st.write(f"- **{alt_name}**: {alt['confidence_score']:.1%}")
+
+            with st.expander("📄 Raw API Responses"):
+                st.json(image_result)
+                st.json(sentiment_result)
