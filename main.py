@@ -250,6 +250,7 @@ class ModelManager:
 
     def load_model(self, model_path: str):
         """Load the TensorFlow/Keras model from pickle file"""
+        print(f"Attempting to load sentiment model from {model_path}")
         if self._model is not None:
             return  # Already loaded
 
@@ -350,10 +351,11 @@ class SentimentModelManager:
         return cls._instance
 
     def load_model(self, model_path: str = "models/final_model_state.pkl"):
+        """Load sentiment model from a Transformers directory or legacy pickle file."""
         if self._model is not None:
             return
 
-        # NLTK assets used for text preprocessing
+        # Download NLTK data (used for preprocessing)
         try:
             nltk.download("wordnet", quiet=True)
             nltk.download("punkt", quiet=True)
@@ -363,49 +365,50 @@ class SentimentModelManager:
 
         from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-        # ----- 1. If the path points to a full Transformers directory -----
+        # ----- 1. Load from a full Transformers directory (new format) -----
         if os.path.isdir(model_path) and os.path.exists(
             os.path.join(model_path, "config.json")
         ):
-            self._tokenizer = AutoTokenizer.from_pretrained(model_path)
+            print(f"Loading model from directory: {model_path}")
             self._model = AutoModelForSequenceClassification.from_pretrained(model_path)
+            self._tokenizer = AutoTokenizer.from_pretrained(model_path)
             self._id2label = {
                 int(k): v
                 for k, v in getattr(self._model.config, "id2label", {}).items()
             }
             if not self._id2label:
                 self._id2label = {0: "negative", 1: "neutral", 2: "positive"}
+            print("✅ Sentiment model loaded from directory")
             return
 
-        # ----- 2. Otherwise treat model_path as a pickle file -----
+        # ----- 2. Legacy: single pickle file (keep for backward compatibility) -----
         pkl_path = model_path
         if not os.path.exists(pkl_path):
             raise FileNotFoundError(f"Model file not found: {pkl_path}")
 
-        # Try to load the full model directly (saved with torch.save(model, ...))
+        # Try full model load (torch.save of entire model)
         try:
-            self._model = torch.load(pkl_path, map_location="cpu")
-            # If it's a full model, try to extract id2label from its config
+            self._model = torch.load(pkl_path, map_location="cpu", weights_only=False)
+            try:
+                self._tokenizer = AutoTokenizer.from_pretrained(
+                    "google-bert/bert-base-uncased"
+                )
+            except Exception:
+                self._tokenizer = None
             if hasattr(self._model, "config") and hasattr(
                 self._model.config, "id2label"
             ):
                 self._id2label = self._model.config.id2label
             else:
                 self._id2label = {0: "negative", 1: "neutral", 2: "positive"}
-
-            # Load tokenizer from the base model (cached after first use)
-            self._tokenizer = AutoTokenizer.from_pretrained(
-                "google-bert/bert-base-uncased"
-            )
+            print("✅ Sentiment model loaded from legacy pickle (full model)")
             return
         except Exception:
-            # If full model load fails, fall back to state-dict approach
             pass
 
-        # ----- 3. Fallback: load base architecture and state dict -----
+        # Fallback: load base model + state dict
         checkpoint = "google-bert/bert-base-uncased"
         try:
-            # Try to use cached version first
             self._model = AutoModelForSequenceClassification.from_pretrained(
                 checkpoint, num_labels=3, local_files_only=True
             )
@@ -413,23 +416,23 @@ class SentimentModelManager:
                 checkpoint, local_files_only=True
             )
         except Exception:
-            # Download if not cached
             self._model = AutoModelForSequenceClassification.from_pretrained(
                 checkpoint, num_labels=3
             )
             self._tokenizer = AutoTokenizer.from_pretrained(checkpoint)
 
-        with open(pkl_path, "rb") as f:
-            data = pickle.load(f)
-
+        data = torch.load(pkl_path, map_location="cpu", weights_only=False)
         if "model_state_dict" in data:
             self._model.load_state_dict(data["model_state_dict"])
+        else:
+            self._model.load_state_dict(data)
 
         self._id2label = {
             int(k): v for k, v in getattr(self._model.config, "id2label", {}).items()
         }
         if not self._id2label:
             self._id2label = {0: "negative", 1: "neutral", 2: "positive"}
+        print("✅ Sentiment model loaded from legacy pickle (state dict)")
 
     @staticmethod
     def preprocess_text(text: str) -> str:
@@ -512,19 +515,14 @@ def preprocess_image_for_tensorflow(image_bytes: bytes, target_size=(80, 60)):
 
 @app.on_event("startup")
 async def startup_event():
-    """Load models on startup"""
+    # ... image model loading ...
     try:
-        model_manager.load_model("./models/image_classifier_ecommerce.pkl")
-        print("✅ Image model loaded successfully on startup")
-    except Exception as e:
-        print(f"❌ Failed to load image model on startup: {e}")
-
-    try:
-        sentiment_model_manager.load_model("./models/final_model_state.pkl")
+        sentiment_model_manager.load_model(
+            "./models/sentiment_model"
+        )  # directory with config.json
         print("✅ Sentiment model loaded successfully on startup")
     except Exception as e:
         print(f"❌ Failed to load sentiment model on startup: {e}")
-        # Continue running server; endpoint will raise 503 if called
 
 
 # Add this helper function to convert numpy types to Python native types
@@ -665,6 +663,7 @@ async def sentiment_analysis_form(
     authenticated_user: Annotated[User, Depends(get_current_user)],
 ):
     """Form-based sentiment review endpoint."""
+    print(f"Model is loaded: {sentiment_model_manager._model is not None}")
     if sentiment_model_manager._model is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
