@@ -1,6 +1,3 @@
-import io
-
-import cv2 as cv
 import requests
 import streamlit as st
 from fastapi import HTTPException
