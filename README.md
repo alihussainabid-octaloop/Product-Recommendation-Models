@@ -8,3 +8,5 @@
   - ```python -m venv .venv```
   - ```pip install -r requirment.txt```
   - ```streamlit run streamlit_app.py```
+
+## You can simply start the project by running backend.ps1 script then frontend.ps1
