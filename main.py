@@ -20,6 +20,7 @@ from nltk.stem import WordNetLemmatizer
 from PIL import Image
 from pwdlib import PasswordHash
 from pydantic import BaseModel
+from starlette.responses import FileResponse
 
 SECRET_KEY = "7c5902732404d7970efa708bafc0f8ce5d5b391c57e02c1000d9ca61bf561cdf"
 ALGORITHM = "HS256"
@@ -159,6 +160,11 @@ async def get_current_active_user(
             detail="Inactive User",
         )
     return current_user
+
+
+@app.get("/favicon", include_in_schema=True)
+async def favicon():
+    return FileResponse("./static/favicon.png", media_type="image/png")
 
 
 @app.post("/token")
@@ -662,7 +668,7 @@ async def sentiment_analysis_form(
     review: Annotated[str, Form(...)],
     authenticated_user: Annotated[User, Depends(get_current_user)],
 ):
-    """Form-based sentiment review endpoint."""
+    """Form-based sentiment review endpoint returning human-readable labels."""
     print(f"Model is loaded: {sentiment_model_manager._model is not None}")
     if sentiment_model_manager._model is None:
         raise HTTPException(
@@ -671,6 +677,25 @@ async def sentiment_analysis_form(
         )
 
     results = sentiment_model_manager.predict(review)
+
+    # --- BEGIN: Ensure human-readable sentiment label ---
+    predicted_idx = results.get("predicted_index")
+    if predicted_idx is not None:
+        # Map numeric index to standard human-readable labels
+        if predicted_idx == 0:
+            human_label = "negative"
+        elif predicted_idx == 1:
+            human_label = "neutral"
+        elif predicted_idx == 2:
+            human_label = "positive"
+        else:
+            # Fallback: use whatever label the model provided (if any)
+            human_label = results.get("predicted_label", "unknown")
+        results["sentiment"] = human_label
+    else:
+        # If no index is available, try to use the existing predicted_label
+        results["sentiment"] = results.get("predicted_label", "unknown")
+    # --- END ---
 
     return {
         "status": "success",

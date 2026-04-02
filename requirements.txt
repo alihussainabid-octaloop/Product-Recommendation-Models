@@ -11,3 +11,4 @@ pillow
 torch
 transformers
 nltk
+plotly
