@@ -6,15 +6,6 @@ import requests
 import streamlit as st
 
 # ------------------------------
-# Page configuration
-# ------------------------------
-st.set_page_config(
-    page_title="Product Recommender AI",
-    page_icon="🛍️",
-    layout="wide",
-)
-
-# ------------------------------
 # Session state
 # ------------------------------
 if "token" not in st.session_state:
@@ -22,7 +13,16 @@ if "token" not in st.session_state:
 if "username" not in st.session_state:
     st.session_state.username = None
 if "base_url" not in st.session_state:
-    st.session_state.base_url = "http://localhost:8000"
+    st.session_state.base_url = "http://127.0.0.1:8000"
+
+# ------------------------------
+# Page configuration
+# ------------------------------
+st.set_page_config(
+    page_title="Product Recommender AI",
+    page_icon=f"{st.session_state.base_url}/favicon",
+    layout="wide",
+)
 
 
 # ------------------------------
