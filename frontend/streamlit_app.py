@@ -63,8 +63,10 @@ def api_request(
         if e.response is not None:
             try:
                 st.error(e.response.json())
-            except:
-                st.error(e.response.text)
+            except Exception as exp:
+                st.error(
+                    f"Request Exception:\t{e.response.text}\nResponse Exception:\t{exp}"
+                )
         return {}
 
 
@@ -91,7 +93,6 @@ def register(username: str, password: str, email: str, full_name: str) -> bool:
 
 def classify_image(image_file) -> Optional[Dict]:
     """Send image for classification with correct MIME type."""
-    # Ensure the file is sent as a tuple (filename, file_handle, content_type)
     files = {
         "uploaded_image": (
             image_file.name,
@@ -204,21 +205,18 @@ if st.button("🔍 Analyze & Recommend", type="primary", use_container_width=Tru
         elif not sentiment_result or "predictions" not in sentiment_result:
             st.error("Sentiment analysis failed.")
         else:
-            # Map category index to name
+            # --- Correctly extract category name and confidence from new API ---
+            pred_category = image_result["prediction_result"][
+                "category"
+            ]  # string, e.g., "Footwear"
+            img_conf = image_result["prediction_result"]["confidence"]  # float
             categories = image_result.get("all_possible_categories", [])
-            pred_idx = image_result["prediction_result"]["category"]
-            pred_category = (
-                categories[pred_idx]
-                if 0 <= pred_idx < len(categories)
-                else f"Class {pred_idx}"
-            )
-            img_conf = image_result["prediction_result"]["confidence"]
 
             sentiment = sentiment_result["predictions"].get("sentiment", "unknown")
             sentiment_conf = sentiment_result["predictions"].get("confidence", 0.0)
 
             # Recommendation logic (adjust threshold as needed)
-            is_recommended = (sentiment == "positive") and (img_conf > 0.6)
+            is_recommended = (sentiment == "positive") and (img_conf > 0.5)
 
             st.divider()
             st.subheader("📊 Prediction Results")
@@ -257,7 +255,7 @@ if st.button("🔍 Analyze & Recommend", type="primary", use_container_width=Tru
                 x="Metric",
                 y="Confidence",
                 color="Metric",
-                range_y=[0, 1],  # <-- FIXED: use range_y instead of range
+                range_y=[0, 1],  # fixed: use range_y instead of range
                 text=conf_data["Confidence"].apply(lambda x: f"{x:.1%}"),
                 title="Prediction Confidence",
             )
@@ -268,14 +266,12 @@ if st.button("🔍 Analyze & Recommend", type="primary", use_container_width=Tru
                 annotation_text="Recommendation threshold",
             )
             st.plotly_chart(fig, use_container_width=True)
-            # Optional: alternative predictions
+
+            # Optional: alternative predictions (image)
             with st.expander("🔍 Alternative predictions (image)"):
                 for alt in image_result.get("alternative_predictions", []):
-                    alt_idx = alt.get("category_index")
-                    alt_name = (
-                        categories[alt_idx]
-                        if alt_idx is not None and 0 <= alt_idx < len(categories)
-                        else f"Class {alt_idx}"
+                    alt_name = alt.get(
+                        "category_name", f"Class {alt.get('category_index')}"
                     )
                     st.write(f"- **{alt_name}**: {alt['confidence_score']:.1%}")
 
