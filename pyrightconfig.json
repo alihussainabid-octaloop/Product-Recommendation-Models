@@ -1,0 +1,17 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/pyright/main/packages/vscode-pyright/schemas/pyrightconfig.schema.json",
+  "include": ["./backend/", "./frontend/"],
+  "exclude": ["**/__pycache__", "**/.venv"],
+  "pythonPlatform": "Windows",
+  "typeCheckingMode": "basic",
+  "pythonVersion": "3.12",
+  "analyzeUnannotatedFunctions": true,
+  "verboseOutput": true,
+  "reportUnnecessaryCast": "information",
+  "reportUnnecessaryComparison": "information",
+  "reportUnnecessaryContains": "information",
+  "reportUnnecessaryIsInstance": "information",
+  "reportUnnecessaryTypeIgnoreComment": "information",
+  "reportUnboundVariable": "warning",
+  "reportUndefinedVariable": "error",
+}
