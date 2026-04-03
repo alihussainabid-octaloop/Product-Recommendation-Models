@@ -166,122 +166,134 @@ with st.sidebar:
 # ------------------------------
 # Main area
 # ------------------------------
-st.title("🛍️ AI Product Recommender")
-st.markdown(
-    "Upload a product image and provide a review. The AI will predict the product category and analyze sentiment, then give a recommendation."
-)
+st.set_page_config(layout="wide")
+
 
 if not st.session_state.token:
     st.warning("Please log in to use the recommender.")
     st.stop()
 
-col1, col2 = st.columns(2)
+# Create 3 columns: [10%, 80%, 10%]
+left_spacer, center_column, right_spacer = st.columns([1, 8, 1])
 
-with col1:
-    st.subheader("📸 Product Image")
-    uploaded_image = st.file_uploader(
-        "Choose an image (JPG, PNG)",
-        type=["jpg", "jpeg", "png"],
-        help="Upload a clear product image",
-    )
-    if uploaded_image:
-        st.image(uploaded_image, caption="Uploaded Product", use_container_width=True)
 
-with col2:
-    st.subheader("📝 Product Review")
-    review_text = st.text_area(
-        "Write your review",
-        height=200,
-        placeholder="Example: This product is amazing! High quality and fast shipping.",
+with center_column:
+    st.title("🛍️ AI Product Recommender")
+    st.markdown(
+        "Upload a product image and provide a review. The AI will predict the product category and analyze sentiment, then give a recommendation."
     )
 
-if st.button("🔍 Analyze & Recommend", type="primary", use_container_width=True):
-    if not uploaded_image:
-        st.error("Please upload a product image.")
-    elif not review_text.strip():
-        st.error("Please write a product review.")
-    else:
-        with st.spinner("Calling AI models..."):
-            image_result = classify_image(uploaded_image)
-            sentiment_result = analyze_sentiment(review_text)
+    col1, col2 = st.columns(2)
 
-        if not image_result or "prediction_result" not in image_result:
-            st.error("Image classification failed. Check API logs.")
-        elif not sentiment_result or "predictions" not in sentiment_result:
-            st.error("Sentiment analysis failed.")
+    with col1:
+        st.subheader("📸 Product Image")
+        uploaded_image = st.file_uploader(
+            "Choose an image (JPG, PNG)",
+            type=["jpg", "jpeg", "png"],
+            help="Upload a clear product image",
+        )
+        if uploaded_image:
+            st.image(
+                uploaded_image, caption="Uploaded Product", use_container_width=True
+            )
+
+    with col2:
+        st.subheader("📝 Product Review")
+        review_text = st.text_area(
+            "Write your review",
+            height=200,
+            placeholder="Example: This product is amazing! High quality and fast shipping.",
+        )
+
+    if st.button("🔍 Analyze & Recommend", type="primary", use_container_width=True):
+        if not uploaded_image:
+            st.error("Please upload a product image.")
+        elif not review_text.strip():
+            st.error("Please write a product review.")
         else:
-            # --- Correctly extract category name and confidence from new API ---
-            pred_category = image_result["prediction_result"][
-                "category"
-            ]  # string, e.g., "Footwear"
-            img_conf = image_result["prediction_result"]["confidence"]  # float
-            categories = image_result.get("all_possible_categories", [])
+            with st.spinner("Calling AI models..."):
+                image_result = classify_image(uploaded_image)
+                sentiment_result = analyze_sentiment(review_text)
 
-            sentiment = sentiment_result["predictions"].get("sentiment", "unknown")
-            sentiment_conf = sentiment_result["predictions"].get("confidence", 0.0)
+            if not image_result or "prediction_result" not in image_result:
+                st.error("Image classification failed. Check API logs.")
+            elif not sentiment_result or "predictions" not in sentiment_result:
+                st.error("Sentiment analysis failed.")
+            else:
+                # --- Correctly extract category name and confidence from new API ---
+                pred_category = image_result["prediction_result"][
+                    "category"
+                ]  # string, e.g., "Footwear"
+                img_conf = image_result["prediction_result"]["confidence"]  # float
+                categories = image_result.get("all_possible_categories", [])
 
-            # Recommendation logic (adjust threshold as needed)
-            is_recommended = (sentiment == "positive") and (
-                img_conf > RECOMMENDATION_TRESHOLD
-            )
+                sentiment = sentiment_result["predictions"].get("sentiment", "unknown")
+                sentiment_conf = sentiment_result["predictions"].get("confidence", 0.0)
 
-            st.divider()
-            st.subheader("📊 Prediction Results")
-
-            col_r1, col_r2, col_r3 = st.columns(3)
-            with col_r1:
-                st.metric(
-                    "Product Category",
-                    pred_category,
-                    delta=f"Confidence: {img_conf:.1%}",
+                # Recommendation logic (adjust threshold as needed)
+                is_recommended = (sentiment == "positive") and (
+                    img_conf > RECOMMENDATION_TRESHOLD
                 )
-            with col_r2:
-                st.metric(
-                    "Sentiment",
-                    sentiment.capitalize(),
-                    delta=f"Confidence: {sentiment_conf:.1%}",
-                )
-            with col_r3:
-                if is_recommended:
-                    st.success("✅ **RECOMMENDED**")
-                    st.markdown("This product meets our criteria!")
-                else:
-                    st.error("❌ **NOT RECOMMENDED**")
-                    st.markdown("Low confidence or negative sentiment.")
 
-            # Confidence bar chart
-            st.subheader("📈 Confidence Scores")
-            conf_data = pd.DataFrame(
-                {
-                    "Metric": ["Product Category", "Sentiment"],
-                    "Confidence": [img_conf, sentiment_conf],
-                }
-            )
-            fig = px.bar(
-                conf_data,
-                x="Metric",
-                y="Confidence",
-                color="Metric",
-                range_y=[0, 1],  # fixed: use range_y instead of range
-                text=conf_data["Confidence"].apply(lambda x: f"{x:.1%}"),
-                title="Prediction Confidence",
-            )
-            fig.add_hline(
-                y=RECOMMENDATION_TRESHOLD,
-                line_dash="dash",
-                line_color="red",
-                annotation_text="Recommendation threshold",
-            )
-            st.plotly_chart(fig, use_container_width=True)
+                st.divider()
+                st.subheader("📊 Prediction Results")
 
-            # Optional: alternative predictions (image)
-            with st.expander("🔍 Alternative predictions (image)"):
-                for alt in image_result.get("alternative_predictions", []):
-                    alt_name = alt.get(
-                        "category_name", f"Class {alt.get('category_index')}"
+                col_r1, col_r2, col_r3 = st.columns(3)
+                with col_r1:
+                    st.metric(
+                        "Product Category",
+                        pred_category,
+                        delta=f"Confidence: {img_conf:.1%}",
                     )
-                    st.write(f"- **{alt_name}**: {alt['confidence_score']:.1%}")
+                    with col_r2:
+                        st.metric(
+                            "Sentiment",
+                            sentiment.capitalize(),
+                            delta=f"Confidence: {sentiment_conf:.1%}",
+                        )
+                        with col_r3:
+                            if is_recommended:
+                                st.success("✅ **RECOMMENDED**")
+                                st.markdown("This product meets our criteria!")
+                            else:
+                                st.error("❌ **NOT RECOMMENDED**")
+                                st.markdown(
+                                    "Low confidence, Neutral or negative sentiment."
+                                )
 
-            with st.expander("📄 Raw API Responses"):
-                st.json(image_result)
-                st.json(sentiment_result)
+                # Confidence bar chart
+                st.subheader("📈 Confidence Scores")
+                conf_data = pd.DataFrame(
+                    {
+                        "Metric": ["Product Category", "Sentiment"],
+                        "Confidence": [img_conf, sentiment_conf],
+                    }
+                )
+                fig = px.bar(
+                    conf_data,
+                    x="Metric",
+                    y="Confidence",
+                    color="Metric",
+                    range_y=[0, 1],  # fixed: use range_y instead of range
+                    text=conf_data["Confidence"].apply(lambda x: f"{x:.1%}"),
+                    title="Prediction Confidence",
+                )
+                fig.add_hline(
+                    y=RECOMMENDATION_TRESHOLD,
+                    line_dash="dash",
+                    line_color="red",
+                    annotation_text="Recommendation threshold",
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+                # Optional: alternative predictions (image)
+                with st.expander("🔍 Alternative predictions (image)"):
+                    for alt in image_result.get("alternative_predictions", []):
+                        alt_name = alt.get(
+                            "category_name", f"Class {alt.get('category_index')}"
+                        )
+                        st.write(f"- **{alt_name}**: {alt['confidence_score']:.1%}")
+
+                # with st.expander("📄 Raw API Responses"):
+                #     st.json(image_result)
+                #     st.json(sentiment_result)
