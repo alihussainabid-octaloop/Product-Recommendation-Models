@@ -24,6 +24,11 @@ st.set_page_config(
     layout="wide",
 )
 
+# ------------------------------
+# CONSTANTS
+# ------------------------------
+RECOMMENDATION_TRESHOLD: float = 0.80
+
 
 # ------------------------------
 # Helper functions
@@ -216,7 +221,9 @@ if st.button("🔍 Analyze & Recommend", type="primary", use_container_width=Tru
             sentiment_conf = sentiment_result["predictions"].get("confidence", 0.0)
 
             # Recommendation logic (adjust threshold as needed)
-            is_recommended = (sentiment == "positive") and (img_conf > 0.5)
+            is_recommended = (sentiment == "positive") and (
+                img_conf > RECOMMENDATION_TRESHOLD
+            )
 
             st.divider()
             st.subheader("📊 Prediction Results")
@@ -260,7 +267,7 @@ if st.button("🔍 Analyze & Recommend", type="primary", use_container_width=Tru
                 title="Prediction Confidence",
             )
             fig.add_hline(
-                y=0.6,
+                y=RECOMMENDATION_TRESHOLD,
                 line_dash="dash",
                 line_color="red",
                 annotation_text="Recommendation threshold",
